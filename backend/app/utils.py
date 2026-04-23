@@ -9,7 +9,7 @@ load_dotenv()
 
 api_key = os.getenv("GROQ_API_KEY")
 if not api_key:
-    raise ValueError("GROQ_API_KEY not found in .env file")
+    raise ValueError("GROQ_API_KEY not found")
 
 client = Groq(api_key=api_key)
 
@@ -22,7 +22,9 @@ def extract_video_id(url: str):
 
 def get_transcript(video_id: str):
     url = f"https://www.youtube.com/watch?v={video_id}"
-    ydl_opts_base = {
+    
+    # Try yt-dlp without cookies first (works on server)
+    ydl_opts = {
         'writesubtitles': True,
         'writeautomaticsub': True,
         'subtitleslangs': ['en'],
@@ -31,44 +33,57 @@ def get_transcript(video_id: str):
         'quiet': True,
     }
 
-    # Try without cookies first, then try each browser
-    attempts = [
-        {},  # no cookies
-        {'cookiesfrombrowser': ('brave',)},
-        {'cookiesfrombrowser': ('chrome',)},
-        {'cookiesfrombrowser': ('firefox',)},
-        {'cookiesfrombrowser': ('edge',)},
-    ]
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url, download=False)
+            caps = info.get('subtitles', {}) or info.get('automatic_captions', {})
+            if 'en' not in caps:
+                raise Exception("No English captions found")
+            for item in caps['en']:
+                if item.get('ext') == 'json3':
+                    with urllib.request.urlopen(item['url']) as r:
+                        data = json.loads(r.read())
+                        entries = []
+                        for event in data.get('events', []):
+                            if 'segs' not in event:
+                                continue
+                            start = event.get('tStartMs', 0) / 1000
+                            text = ''.join(s.get('utf8', '') for s in event['segs']).strip()
+                            if text:
+                                entries.append({'start': start, 'text': text})
+                        if entries:
+                            return entries
+    except Exception as e:
+        # Fallback to browser cookies only if running locally
+        is_local = os.getenv("ENVIRONMENT") == "local"
+        if is_local:
+            for browser in [('brave',), ('chrome',), ('firefox',), ('edge',)]:
+                try:
+                    opts = {**ydl_opts, 'cookiesfrombrowser': browser}
+                    with yt_dlp.YoutubeDL(opts) as ydl:
+                        info = ydl.extract_info(url, download=False)
+                        caps = info.get('subtitles', {}) or info.get('automatic_captions', {})
+                        if 'en' not in caps:
+                            continue
+                        for item in caps['en']:
+                            if item.get('ext') == 'json3':
+                                with urllib.request.urlopen(item['url']) as r:
+                                    data = json.loads(r.read())
+                                    entries = []
+                                    for event in data.get('events', []):
+                                        if 'segs' not in event:
+                                            continue
+                                        start = event.get('tStartMs', 0) / 1000
+                                        text = ''.join(s.get('utf8', '') for s in event['segs']).strip()
+                                        if text:
+                                            entries.append({'start': start, 'text': text})
+                                    if entries:
+                                        return entries
+                except Exception:
+                    continue
+        raise Exception(f"Could not fetch transcript: {str(e)}")
 
-    last_error = None
-
-    for attempt in attempts:
-        try:
-            opts = {**ydl_opts_base, **attempt}
-            with yt_dlp.YoutubeDL(opts) as ydl:
-                info = ydl.extract_info(url, download=False)
-                caps = info.get('subtitles', {}) or info.get('automatic_captions', {})
-                if 'en' not in caps:
-                    raise Exception("No English captions found")
-                for item in caps['en']:
-                    if item.get('ext') == 'json3':
-                        with urllib.request.urlopen(item['url']) as r:
-                            data = json.loads(r.read())
-                            entries = []
-                            for event in data.get('events', []):
-                                if 'segs' not in event:
-                                    continue
-                                start = event.get('tStartMs', 0) / 1000
-                                text = ''.join(s.get('utf8', '') for s in event['segs']).strip()
-                                if text:
-                                    entries.append({'start': start, 'text': text})
-                            if entries:
-                                return entries
-        except Exception as e:
-            last_error = e
-            continue
-
-    raise Exception(f"Could not fetch transcript: {str(last_error)}")
+    raise Exception("Could not extract transcript")
 
 def format_transcript(transcript):
     text = ""
