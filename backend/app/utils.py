@@ -22,84 +22,60 @@ def extract_video_id(url: str):
     return None
 
 def get_transcript(video_id: str):
-    # Try youtube-transcript-api first (works on servers)
-    try:
-        transcript = YouTubeTranscriptApi.get_transcript(video_id)
-        return transcript
-    except Exception:
-        pass
+    from youtube_transcript_api import YouTubeTranscriptApi
 
-    # Fallback to yt-dlp without cookies
-    try:
-        url = f"https://www.youtube.com/watch?v={video_id}"
-        ydl_opts = {
-            'writesubtitles': True,
-            'writeautomaticsub': True,
-            'subtitleslangs': ['en'],
-            'subtitlesformat': 'json3',
-            'skip_download': True,
-            'quiet': True,
-        }
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=False)
-            caps = info.get('subtitles', {}) or info.get('automatic_captions', {})
-            if 'en' not in caps:
-                raise Exception("No English captions found")
-            for item in caps['en']:
-                if item.get('ext') == 'json3':
-                    with urllib.request.urlopen(item['url']) as r:
-                        data = json.loads(r.read())
-                        entries = []
-                        for event in data.get('events', []):
-                            if 'segs' not in event:
-                                continue
-                            start = event.get('tStartMs', 0) / 1000
-                            text = ''.join(s.get('utf8', '') for s in event['segs']).strip()
-                            if text:
-                                entries.append({'start': start, 'text': text})
-                        if entries:
-                            return entries
-    except Exception:
-        pass
+    scraper_key = os.getenv("SCRAPER_API_KEY")
 
-    # Final fallback — browser cookies (local only)
-    is_local = os.getenv("ENVIRONMENT") == "local"
-    if is_local:
-        url = f"https://www.youtube.com/watch?v={video_id}"
-        ydl_opts = {
-            'writesubtitles': True,
-            'writeautomaticsub': True,
-            'subtitleslangs': ['en'],
-            'subtitlesformat': 'json3',
-            'skip_download': True,
-            'quiet': True,
-        }
-        for browser in [('brave',), ('chrome',), ('firefox',), ('edge',)]:
-            try:
-                opts = {**ydl_opts, 'cookiesfrombrowser': browser}
-                with yt_dlp.YoutubeDL(opts) as ydl:
-                    info = ydl.extract_info(url, download=False)
-                    caps = info.get('subtitles', {}) or info.get('automatic_captions', {})
-                    if 'en' not in caps:
-                        continue
-                    for item in caps['en']:
-                        if item.get('ext') == 'json3':
-                            with urllib.request.urlopen(item['url']) as r:
-                                data = json.loads(r.read())
-                                entries = []
-                                for event in data.get('events', []):
-                                    if 'segs' not in event:
-                                        continue
-                                    start = event.get('tStartMs', 0) / 1000
-                                    text = ''.join(s.get('utf8', '') for s in event['segs']).strip()
-                                    if text:
-                                        entries.append({'start': start, 'text': text})
-                                if entries:
-                                    return entries
-            except Exception:
-                continue
+    # Try with proxy if key exists (production)
+    if scraper_key:
+        try:
+            proxy_url = f"http://scraperapi:{scraper_key}@proxy-server.scraperapi.com:8001"
+            ytt_api = YouTubeTranscriptApi(
+                proxies={"http": proxy_url, "https": proxy_url}
+            )
+            transcript = ytt_api.fetch(video_id)
+            return [{"start": t.start, "text": t.text} for t in transcript]
+        except Exception as e:
+            raise Exception(f"Proxy transcript fetch failed: {str(e)}")
 
-    raise Exception("Could not fetch transcript. This video may not have captions or is restricted.")
+    # Local fallback — try yt-dlp with browser cookies
+    url = f"https://www.youtube.com/watch?v={video_id}"
+    ydl_opts = {
+        'writesubtitles': True,
+        'writeautomaticsub': True,
+        'subtitleslangs': ['en'],
+        'subtitlesformat': 'json3',
+        'skip_download': True,
+        'quiet': True,
+    }
+    for browser in [('brave',), ('chrome',), ('firefox',), ('edge',)]:
+        try:
+            opts = {**ydl_opts, 'cookiesfrombrowser': browser}
+            with yt_dlp.YoutubeDL(opts) as ydl:
+                info = ydl.extract_info(url, download=False)
+                caps = info.get('subtitles', {}) or info.get('automatic_captions', {})
+                if 'en' not in caps:
+                    continue
+                for item in caps['en']:
+                    if item.get('ext') == 'json3':
+                        with urllib.request.urlopen(item['url']) as r:
+                            data = json.loads(r.read())
+                            entries = []
+                            for event in data.get('events', []):
+                                if 'segs' not in event:
+                                    continue
+                                start = event.get('tStartMs', 0) / 1000
+                                text = ''.join(
+                                    s.get('utf8', '') for s in event['segs']
+                                ).strip()
+                                if text:
+                                    entries.append({'start': start, 'text': text})
+                            if entries:
+                                return entries
+        except Exception:
+            continue
+
+    raise Exception("Could not fetch transcript. Try a different video.")
 
 def format_transcript(transcript):
     text = ""
