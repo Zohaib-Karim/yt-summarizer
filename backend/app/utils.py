@@ -22,24 +22,43 @@ def extract_video_id(url: str):
     return None
 
 def get_transcript(video_id: str):
+    import os
     from youtube_transcript_api import YouTubeTranscriptApi
 
     scraper_key = os.getenv("SCRAPER_API_KEY")
 
-    # Try with proxy if key exists (production)
+    # ✅ 1. Try proxy (production)
     if scraper_key:
         try:
             proxy_url = f"http://scraperapi:{scraper_key}@proxy-server.scraperapi.com:8001"
-            ytt_api = YouTubeTranscriptApi(
-                proxies={"http": proxy_url, "https": proxy_url}
-            )
-            transcript = ytt_api.fetch(video_id)
-            return [{"start": t.start, "text": t.text} for t in transcript]
-        except Exception as e:
-            raise Exception(f"Proxy transcript fetch failed: {str(e)}")
 
-    # Local fallback — try yt-dlp with browser cookies
+            api = YouTubeTranscriptApi(
+                proxies={
+                    "http": proxy_url,
+                    "https": proxy_url
+                }
+            )
+
+            transcript = api.fetch(video_id)
+
+            return [
+                {"start": t.start, "text": t.text}
+                for t in transcript
+            ]
+
+        except Exception as e:
+            print("Proxy failed:", e)
+
+    # ✅ 2. Try direct (sometimes works)
+    try:
+        transcript = YouTubeTranscriptApi.get_transcript(video_id)
+        return transcript
+    except Exception as e:
+        print("Direct fetch failed:", e)
+
+    # ✅ 3. Fallback (local only using yt-dlp)
     url = f"https://www.youtube.com/watch?v={video_id}"
+
     ydl_opts = {
         'writesubtitles': True,
         'writeautomaticsub': True,
@@ -48,34 +67,50 @@ def get_transcript(video_id: str):
         'skip_download': True,
         'quiet': True,
     }
+
     for browser in [('brave',), ('chrome',), ('firefox',), ('edge',)]:
         try:
+            import yt_dlp, json, urllib.request
+
             opts = {**ydl_opts, 'cookiesfrombrowser': browser}
+
             with yt_dlp.YoutubeDL(opts) as ydl:
                 info = ydl.extract_info(url, download=False)
+
                 caps = info.get('subtitles', {}) or info.get('automatic_captions', {})
+
                 if 'en' not in caps:
                     continue
+
                 for item in caps['en']:
                     if item.get('ext') == 'json3':
                         with urllib.request.urlopen(item['url']) as r:
                             data = json.loads(r.read())
+
                             entries = []
                             for event in data.get('events', []):
                                 if 'segs' not in event:
                                     continue
+
                                 start = event.get('tStartMs', 0) / 1000
                                 text = ''.join(
                                     s.get('utf8', '') for s in event['segs']
                                 ).strip()
+
                                 if text:
-                                    entries.append({'start': start, 'text': text})
+                                    entries.append({
+                                        'start': start,
+                                        'text': text
+                                    })
+
                             if entries:
                                 return entries
+
         except Exception:
             continue
 
-    raise Exception("Could not fetch transcript. Try a different video.")
+    # ❌ final fail
+    raise Exception("Could not fetch transcript (blocked or no captions)")
 
 def format_transcript(transcript):
     text = ""
