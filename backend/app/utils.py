@@ -22,12 +22,12 @@ def extract_video_id(url: str):
     return None
 
 def get_transcript(video_id: str):
-    import os
     from youtube_transcript_api import YouTubeTranscriptApi
+    import os
 
     scraper_key = os.getenv("SCRAPER_API_KEY")
 
-    # ✅ 1. Try proxy (production)
+    # ✅ Try proxy FIRST
     if scraper_key:
         try:
             proxy_url = f"http://scraperapi:{scraper_key}@proxy-server.scraperapi.com:8001"
@@ -47,70 +47,20 @@ def get_transcript(video_id: str):
             ]
 
         except Exception as e:
-            print("Proxy failed:", e)
+            print("Proxy failed:", str(e))
 
-    # ✅ 2. Try direct (sometimes works)
+    # ✅ Try normal (sometimes works)
     try:
         transcript = YouTubeTranscriptApi.get_transcript(video_id)
         return transcript
     except Exception as e:
-        print("Direct fetch failed:", e)
+        print("Direct failed:", str(e))
 
-    # ✅ 3. Fallback (local only using yt-dlp)
-    url = f"https://www.youtube.com/watch?v={video_id}"
+    # ❌ REMOVE yt-dlp fallback (it does NOT work in production)
 
-    ydl_opts = {
-        'writesubtitles': True,
-        'writeautomaticsub': True,
-        'subtitleslangs': ['en'],
-        'subtitlesformat': 'json3',
-        'skip_download': True,
-        'quiet': True,
-    }
-
-    for browser in [('brave',), ('chrome',), ('firefox',), ('edge',)]:
-        try:
-            import yt_dlp, json, urllib.request
-
-            opts = {**ydl_opts, 'cookiesfrombrowser': browser}
-
-            with yt_dlp.YoutubeDL(opts) as ydl:
-                info = ydl.extract_info(url, download=False)
-
-                caps = info.get('subtitles', {}) or info.get('automatic_captions', {})
-
-                if 'en' not in caps:
-                    continue
-
-                for item in caps['en']:
-                    if item.get('ext') == 'json3':
-                        with urllib.request.urlopen(item['url']) as r:
-                            data = json.loads(r.read())
-
-                            entries = []
-                            for event in data.get('events', []):
-                                if 'segs' not in event:
-                                    continue
-
-                                start = event.get('tStartMs', 0) / 1000
-                                text = ''.join(
-                                    s.get('utf8', '') for s in event['segs']
-                                ).strip()
-
-                                if text:
-                                    entries.append({
-                                        'start': start,
-                                        'text': text
-                                    })
-
-                            if entries:
-                                return entries
-
-        except Exception:
-            continue
-
-    # ❌ final fail
-    raise Exception("Could not fetch transcript (blocked or no captions)")
+    raise Exception(
+        "Transcript unavailable. This video may be restricted or have no captions."
+    )
 
 def format_transcript(transcript):
     text = ""
