@@ -78,7 +78,7 @@ export default function Home() {
     setShowNew(false);
     try {
       const res = await fetch(
-        `http://127.0.0.1:8000/summarize?url=${encodeURIComponent(url)}&language=${encodeURIComponent(language)}`
+        `https://yt-summarizer-usio.onrender.com/summarize?url=${encodeURIComponent(url)}&language=${encodeURIComponent(language)}`
       );
       const data = await res.json();
       if (data.error) {
