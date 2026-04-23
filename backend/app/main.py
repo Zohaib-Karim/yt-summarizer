@@ -31,3 +31,12 @@ def summarize(url: str, language: str = "English"):
         return {"video_id": video_id, "summary": summary}
     except Exception as e:
         return {"error": str(e)}
+
+@app.get("/test")
+def test_transcript():
+    try:
+        from youtube_transcript_api import YouTubeTranscriptApi
+        t = YouTubeTranscriptApi.get_transcript("Ks-_Mh1QhMc")
+        return {"status": "ok", "entries": len(t)}
+    except Exception as e:
+        return {"status": "error", "detail": str(e)}
